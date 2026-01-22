@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 
 #include <conio.h>
 #include <atari.h>
@@ -24,7 +25,7 @@
 #define UI_STATUS_Y 12
 #define HOST_FIELD_WIDTH 32
 #define PORT_FIELD_WIDTH 5
-#define DEFAULT_STATUS_MSG "TAB: move fields SPACE: toggle values"
+#define DEFAULT_STATUS_MSG "\xD4\xC1\xC2 move fields \xD3\xD0\xC1\xC3\xC5 toggle values"
 
 static char host_buf[HOST_BUF_LEN];
 
@@ -432,6 +433,14 @@ connect_now:
     }
 
     build_host_buffer(form.host, form.transport_tcp, flags);
+    printf("\nHost buffer: %s\n", host_buf);
+    printf("Host: %s\n", form.host);
+    printf("Port: %s\n", form.port);
+    printf("Transport: %s\n", form.transport_tcp ? "TCP" : "UDP");
+    printf("Packet Mode: %s\n", form.packet_seq ? "Sequenced" : "Raw");
+    printf("Send REGISTER: %s\n", form.send_register ? "Yes" : "No");
+    printf("Press any key to continue...");
+    (void)cgetc();
     ok = fuji_enable_udpstream(swap16(port_value), host_buf);
     (void)ok;
 
