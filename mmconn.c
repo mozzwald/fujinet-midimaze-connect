@@ -433,6 +433,7 @@ connect_now:
     }
 
     build_host_buffer(form.host, form.transport_tcp, flags);
+#ifdef DEBUG
     printf("\nHost buffer: %s\n", host_buf);
     printf("Host: %s\n", form.host);
     printf("Port: %s\n", form.port);
@@ -441,13 +442,20 @@ connect_now:
     printf("Send REGISTER: %s\n", form.send_register ? "Yes" : "No");
     printf("Press any key to continue...");
     (void)cgetc();
+#endif
     ok = fuji_enable_udpstream(swap16(port_value), host_buf);
     (void)ok;
-
-    ok = fuji_unmount_disk_image(1);
-    (void)ok;
+#ifndef DISK
+    /* MIDIMaze Cartridge */
     ok = fuji_mount_all();
     (void)ok;
+    ok = fuji_unmount_disk_image(1);
+    (void)ok;
+#else
+    /* MIDIMaze XEX */
+    ok = fuji_mount_all();
+    (void)ok;
+#endif
 
     cprintf("Done!\n");
 
