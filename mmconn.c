@@ -19,10 +19,9 @@
 #define UI_HOST_Y 2
 #define UI_PORT_Y 4
 #define UI_TRANSPORT_Y 6
-#define UI_MODE_Y 7
-#define UI_REGISTER_Y 8
-#define UI_CONNECT_Y 10
-#define UI_STATUS_Y 12
+#define UI_REGISTER_Y 7
+#define UI_CONNECT_Y 9
+#define UI_STATUS_Y 11
 #define HOST_FIELD_WIDTH 32
 #define PORT_FIELD_WIDTH 5
 #define DEFAULT_STATUS_MSG "\xD4\xC1\xC2 move fields \xD3\xD0\xC1\xC3\xC5 toggle values"
@@ -40,7 +39,6 @@ typedef enum
     FIELD_HOST = 0,
     FIELD_PORT,
     FIELD_TRANSPORT,
-    FIELD_MODE,
     FIELD_REGISTER,
     FIELD_CONNECT,
     FIELD_COUNT
@@ -51,7 +49,6 @@ typedef struct
     char host[HOSTNAME_MAX_LEN + 1];
     char port[6];
     bool transport_tcp;
-    bool packet_seq;
     bool send_register;
     Field focus;
     char status[40];
@@ -171,9 +168,6 @@ static void draw_form(const FormState *state)
     draw_label(UI_TRANSPORT_Y, "Transport:", state->focus == FIELD_TRANSPORT);
     draw_toggle_value(12, UI_TRANSPORT_Y, "TCP", "UDP", !state->transport_tcp);
 
-    draw_label(UI_MODE_Y, "Packet Mode:", state->focus == FIELD_MODE);
-    draw_toggle_value(14, UI_MODE_Y, "Raw", "Sequenced", state->packet_seq);
-
     draw_label(UI_REGISTER_Y, "Send REGISTER?", state->focus == FIELD_REGISTER);
     draw_toggle_value(18, UI_REGISTER_Y, "Yes", "No", !state->send_register);
 
@@ -290,7 +284,6 @@ int main(void)
     memset(&form, 0, sizeof(form));
     strncpy(form.port, "5004", sizeof(form.port) - 1);
     form.transport_tcp = true;
-    form.packet_seq = false;
     form.send_register = true;
     form.focus = FIELD_HOST;
     strncpy(form.status, DEFAULT_STATUS_MSG, sizeof(form.status) - 1);
@@ -358,18 +351,6 @@ int main(void)
                     draw_form(&form);
                 }
                 break;
-            case FIELD_MODE:
-                if (key == CH_CURS_LEFT || key == CH_CURS_RIGHT || key == ' ')
-                {
-                    form.packet_seq = !form.packet_seq;
-                    draw_toggle_value(14, UI_MODE_Y, "Raw", "Sequenced", form.packet_seq);
-                }
-                else if (key == CH_ENTER)
-                {
-                    advance_focus(&form, 1);
-                    draw_form(&form);
-                }
-                break;
             case FIELD_REGISTER:
                 if (key == CH_CURS_LEFT || key == CH_CURS_RIGHT || key == ' ')
                 {
@@ -427,18 +408,12 @@ connect_now:
     {
         flags |= (1u << 1);
     }
-    if (form.packet_seq)
-    {
-        flags |= (1u << 2);
-    }
-
     build_host_buffer(form.host, form.transport_tcp, flags);
 #ifdef DEBUG
     printf("\nHost buffer: %s\n", host_buf);
     printf("Host: %s\n", form.host);
     printf("Port: %s\n", form.port);
     printf("Transport: %s\n", form.transport_tcp ? "TCP" : "UDP");
-    printf("Packet Mode: %s\n", form.packet_seq ? "Sequenced" : "Raw");
     printf("Send REGISTER: %s\n", form.send_register ? "Yes" : "No");
     printf("Press any key to continue...");
     (void)cgetc();
