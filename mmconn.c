@@ -10,10 +10,7 @@
 
 #define HOST_BUF_LEN 64
 #define DEFAULT_PORT 5004
-#define HOST_PREFIX_TCP "tcp:"
-#define HOST_PREFIX_UDP "udp:"
-#define HOST_PREFIX_LEN 4
-#define HOSTNAME_MAX_LEN (HOST_BUF_LEN - HOST_PREFIX_LEN - 2)
+#define HOSTNAME_MAX_LEN (HOST_BUF_LEN - 3)
 
 #define UI_TITLE_Y 0
 #define UI_HOST_Y 2
@@ -73,20 +70,19 @@ static uint16_t swap16(uint16_t value)
     return (uint16_t)(((uint32_t)value << 8) | ((uint32_t)value >> 8));
 }
 
-static void build_host_buffer(const char *hostname, bool tcp_transport, uint8_t flags)
+static void build_host_buffer(const char *hostname, uint8_t flags, uint8_t audf3)
 {
     size_t len;
-    const char *prefix = tcp_transport ? HOST_PREFIX_TCP : HOST_PREFIX_UDP;
 
     memset(host_buf, 0, sizeof(host_buf));
-    strncpy(host_buf, prefix, HOST_BUF_LEN - 1);
-    strncat(host_buf, hostname, HOSTNAME_MAX_LEN);
-    host_buf[HOST_BUF_LEN - 2] = '\0';
+    strncpy(host_buf, hostname, HOSTNAME_MAX_LEN);
+    host_buf[HOST_BUF_LEN - 3] = '\0';
 
     len = strlen(host_buf);
-    if (len + 1 < HOST_BUF_LEN)
+    if (len + 2 < HOST_BUF_LEN)
     {
         host_buf[len + 1] = (char)flags;
+        host_buf[len + 2] = (char)audf3;
     }
 }
 
@@ -408,7 +404,12 @@ connect_now:
     {
         flags |= (1u << 1);
     }
-    build_host_buffer(form.host, form.transport_tcp, flags);
+    flags |= (1u << 2); /* TX clock external */
+    if (get_tv() == AT_PAL)
+    {
+        flags |= (1u << 4);
+    }
+    build_host_buffer(form.host, flags, 21);
 #ifdef DEBUG
     printf("\nHost buffer: %s\n", host_buf);
     printf("Host: %s\n", form.host);
@@ -421,13 +422,18 @@ connect_now:
     ok = fuji_enable_udpstream(swap16(port_value), host_buf);
     (void)ok;
 #ifndef DISK
-    /* MIDIMaze Cartridge */
+    /* MIDIMaze Cartridge 
+     * - Unmount D1 so it won't respond when midimaze allows for handler
+     * - Mount All so CONFIG is out of the way
+     */
+    ok = fuji_unmount_disk_image(0); 
+    (void)ok;
     ok = fuji_mount_all();
     (void)ok;
-    ok = fuji_unmount_disk_image(1);
-    (void)ok;
 #else
-    /* MIDIMaze XEX */
+    /* MIDIMaze XEX
+     * - Mount all so it boots the game
+     */
     ok = fuji_mount_all();
     (void)ok;
 #endif
