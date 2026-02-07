@@ -828,6 +828,11 @@ static void handle_request(int fd, const char *path, const char *query)
             game = find_game_by_id_locked(game_id);
             pthread_mutex_unlock(&g_lock);
         }
+        if (game_id[0] && !game)
+        {
+            send_http(fd, "{\"ok\":false,\"error\":\"not_found\"}");
+            return;
+        }
         if (client->pending_start)
         {
             client->pending_start = false;

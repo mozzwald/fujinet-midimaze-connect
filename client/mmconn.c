@@ -288,6 +288,7 @@ static void draw_wait_screen(const char *game_name, uint8_t players, uint8_t max
     cprintf("Waiting for Players");
     gotoxy(0, 3);
     cprintf("Game: %s", game_name);
+    gotoxy(0, 4);
     cprintf("Players: %u of %u", players, max_players);
     gotoxy(0, 7);
     cprintf("Press ESC to cancel");
@@ -815,10 +816,17 @@ int main(void)
             snprintf(g_line, sizeof(g_line), "/wait?client_id=%s&game_id=%s", g_state.client_id, g_state.current_game_id);
             if (http_get_json(g_line, g_line, sizeof(g_line)))
             {
+                if (json_get_string(g_line, "error", g_cmd, sizeof(g_cmd)) && strcmp(g_cmd, "not_found") == 0)
+                {
+                    g_state.screen = SCREEN_CONFIG;
+                    strncpy(g_state.status, "Game timed out.", sizeof(g_state.status) - 1);
+                    draw_config_screen(&g_state);
+                    continue;
+                }
                 if (json_get_string(g_line, "cmd", g_cmd, sizeof(g_cmd)) && strcmp(g_cmd, "start") == 0)
                 {
-                        json_get_string(g_line, "host", g_state.start_host, sizeof(g_state.start_host));
-                        g_port = 0;
+                    json_get_string(g_line, "host", g_state.start_host, sizeof(g_state.start_host));
+                    g_port = 0;
                         json_get_int(g_line, "port", &g_port);
                         g_state.start_port = (uint16_t)g_port;
 
