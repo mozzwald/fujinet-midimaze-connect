@@ -17,8 +17,9 @@ make
 ```
 
 Build outputs:
-- `mmconncart.xex` (cartridge)
-- `mmconndisk.xex` (disk/XEX)
+- `build/mmconncart.xex` (cartridge)
+- `build/mmconndisk.xex` (disk/XEX)
+- `build/mmsrv` (server)
 
 ## Run
 - Put XEX file on FujiNet SD card
@@ -28,6 +29,28 @@ Build outputs:
 - Enter host and port in the program
 - Choose transport (TCP/UDP) and whether to send REGISTER.
 - Select **CONNECT**.
+
+## Server
+The server is a lobby + game relay in one binary. It uses JSON‑lines over TCP for the lobby and spawns game threads on a port range.
+
+Create a config file (key=value):
+
+```ini
+host_name=your.dns.name
+lobby_port=5000
+game_port_min=5100
+game_port_max=5199
+max_games=5
+max_players_default=10
+join_timeout_sec=600
+drop_timeout_sec=15
+```
+
+Run:
+
+```sh
+./build/mmsrv /path/to/server.cfg
+```
 
 ## Notes
 - FujiNet Firmware with NETStream support is required. (FujiNet-Firmware or FujiNet-PC) At the time this was created, that only lives at:
