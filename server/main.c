@@ -368,7 +368,7 @@ static void *game_thread(void *arg)
         connected[i] = false;
     }
 
-    uint64_t drop_deadline = 0;
+    uint64_t drop_deadline = (uint64_t)time(NULL) * 1000u + (uint64_t)g_cfg.drop_timeout_sec * 1000u;
 
     while (1)
     {
