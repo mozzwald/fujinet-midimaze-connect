@@ -28,6 +28,7 @@
 
 #define LIST_REFRESH_TICKS 620
 #define HEARTBEAT_TICKS 620
+#define WAIT_POLL_TICKS 124
 
 #define MAX_GAMES 8
 #define GAME_ID_LEN 8
@@ -67,6 +68,7 @@ typedef struct
     uint8_t focus;
     char client_id[GAME_ID_LEN + 1];
     char current_game_id[GAME_ID_LEN + 1];
+    char current_game_name[GAME_NAME_MAX + 1];
     char start_host[HOSTNAME_MAX_LEN + 1];
     uint16_t start_port;
 } AppState;
@@ -81,6 +83,7 @@ static char g_line[256];
 static char g_cmd[16];
 static uint32_t g_last_refresh = 0;
 static uint32_t g_last_heartbeat = 0;
+static uint32_t g_last_wait_poll = 0;
 static uint32_t g_now = 0;
 static int g_port = 0;
 static char g_key = 0;
@@ -98,6 +101,8 @@ static const char *g_obj_end = NULL;
 static char g_devicespec[96];
 static char g_url[128];
 static const char g_hex[] = "0123456789ABCDEF";
+static uint8_t g_wait_players = 0;
+static uint8_t g_wait_max = 0;
 
 static uint32_t rtclok_now(void)
 {
@@ -237,7 +242,7 @@ static void draw_list_screen(const GameEntry *games, uint8_t game_count, uint8_t
     gotoxy(0, UI_TITLE_Y);
     cprintf("Lobby Games");
     gotoxy(0, 2);
-    cprintf("R=Refresh  C=Create  ENTER=Join");
+    cprintf("ARROWS/TAB move  R=Refresh  C=Create");
 
     for (i = 0; i < game_count; i++)
     {
@@ -250,7 +255,7 @@ static void draw_list_screen(const GameEntry *games, uint8_t game_count, uint8_t
         cprintf("%s (%u/%u)%s", games[i].name, games[i].players, games[i].max_players,
                 games[i].active ? "*" : "");
     }
-    set_status("Waiting for games...");
+    set_status(game_count ? "ENTER=Join  ESC=Back" : "No games yet");
 }
 
 static void draw_create_screen(const AppState *state, const char *game_name, const char *max_players, uint8_t focus)
@@ -276,14 +281,15 @@ static void draw_create_screen(const AppState *state, const char *game_name, con
     set_status(state->status);
 }
 
-static void draw_wait_screen(const char *game_id)
+static void draw_wait_screen(const char *game_name, uint8_t players, uint8_t max_players)
 {
     clrscr();
     gotoxy(0, UI_TITLE_Y);
     cprintf("Waiting for Players");
     gotoxy(0, 3);
-    cprintf("Game: %s", game_id);
-    gotoxy(0, 5);
+    cprintf("Game: %s", game_name);
+    cprintf("Players: %u of %u", players, max_players);
+    gotoxy(0, 7);
     cprintf("Press ESC to cancel");
     set_status("Waiting for lobby start...");
 }
@@ -676,16 +682,22 @@ int main(void)
                 draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
                 continue;
             }
-            if (g_key == CH_CURS_UP && g_selected > 0)
+            if ((g_key == CH_CURS_UP || g_key == CH_TAB) && g_selected > 0)
             {
                 g_selected--;
                 draw_list_screen(g_games, g_game_count, g_selected);
                 continue;
             }
-            if (g_key == CH_CURS_DOWN && g_selected + 1 < g_game_count)
+            if ((g_key == CH_CURS_DOWN || g_key == CH_TAB) && g_selected + 1 < g_game_count)
             {
                 g_selected++;
                 draw_list_screen(g_games, g_game_count, g_selected);
+                continue;
+            }
+            if (g_key == CH_ESC)
+            {
+                g_state.screen = SCREEN_CONFIG;
+                draw_config_screen(&g_state);
                 continue;
             }
             if (g_key == CH_ENTER && g_game_count > 0)
@@ -695,9 +707,13 @@ int main(void)
                 if (http_get_json(g_line, g_line, sizeof(g_line)))
                 {
                     snprintf(g_state.current_game_id, sizeof(g_state.current_game_id), "%s", g_games[g_selected].id);
+                    snprintf(g_state.current_game_name, sizeof(g_state.current_game_name), "%s", g_games[g_selected].name);
+                    g_wait_players = g_games[g_selected].players;
+                    g_wait_max = g_games[g_selected].max_players;
                     g_state.screen = SCREEN_WAIT;
-                    draw_wait_screen(g_state.current_game_id);
+                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max);
                     g_last_heartbeat = rtclok_now();
+                    g_last_wait_poll = 0;
                 }
                 continue;
             }
@@ -753,9 +769,13 @@ int main(void)
                 if (http_get_json(g_line, g_line, sizeof(g_line)))
                 {
                     json_get_string(g_line, "game_id", g_state.current_game_id, sizeof(g_state.current_game_id));
+                    snprintf(g_state.current_game_name, sizeof(g_state.current_game_name), "%s", g_game_name);
+                    g_wait_players = 1;
+                    g_wait_max = (uint8_t)atoi(g_game_max);
                     g_state.screen = SCREEN_WAIT;
-                    draw_wait_screen(g_state.current_game_id);
+                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max);
                     g_last_heartbeat = rtclok_now();
+                    g_last_wait_poll = 0;
                 }
                 continue;
             }
@@ -790,18 +810,20 @@ int main(void)
                 g_last_heartbeat = g_now;
             }
 
-            snprintf(g_line, sizeof(g_line), "/wait?client_id=%s", g_state.client_id);
+            if (g_last_wait_poll == 0 || rtclok_diff(g_now, g_last_wait_poll) >= WAIT_POLL_TICKS)
+            {
+            snprintf(g_line, sizeof(g_line), "/wait?client_id=%s&game_id=%s", g_state.client_id, g_state.current_game_id);
             if (http_get_json(g_line, g_line, sizeof(g_line)))
             {
                 if (json_get_string(g_line, "cmd", g_cmd, sizeof(g_cmd)) && strcmp(g_cmd, "start") == 0)
                 {
-                    json_get_string(g_line, "host", g_state.start_host, sizeof(g_state.start_host));
-                    g_port = 0;
-                    json_get_int(g_line, "port", &g_port);
-                    g_state.start_port = (uint16_t)g_port;
+                        json_get_string(g_line, "host", g_state.start_host, sizeof(g_state.start_host));
+                        g_port = 0;
+                        json_get_int(g_line, "port", &g_port);
+                        g_state.start_port = (uint16_t)g_port;
 
-                    clrscr();
-                    cprintf("Starting game...");
+                        clrscr();
+                        cprintf("Starting game...");
                     if (start_netstream(g_state.start_host, g_state.start_port))
                     {
                         cprintf("Done!\n");
@@ -813,6 +835,14 @@ int main(void)
                         return 1;
                     }
                 }
+                if (json_get_int(g_line, "players", &g_players) && json_get_int(g_line, "max", &g_max_players))
+                {
+                    g_wait_players = (uint8_t)g_players;
+                    g_wait_max = (uint8_t)g_max_players;
+                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max);
+                }
+            }
+                g_last_wait_poll = g_now;
             }
         }
     }

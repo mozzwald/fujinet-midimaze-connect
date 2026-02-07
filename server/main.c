@@ -820,6 +820,14 @@ static void handle_request(int fd, const char *path, const char *query)
 
     if (strcmp(path, "/wait") == 0)
     {
+        get_query_param(query, "game_id", game_id, sizeof(game_id));
+        Game *game = NULL;
+        if (game_id[0])
+        {
+            pthread_mutex_lock(&g_lock);
+            game = find_game_by_id_locked(game_id);
+            pthread_mutex_unlock(&g_lock);
+        }
         if (client->pending_start)
         {
             client->pending_start = false;
@@ -830,7 +838,16 @@ static void handle_request(int fd, const char *path, const char *query)
             send_http(fd, body);
             return;
         }
-        send_http(fd, "{\"ok\":true,\"status\":\"waiting\"}");
+        if (game)
+        {
+            char body[LINE_BUF];
+            snprintf(body, sizeof(body),
+                     "{\"ok\":true,\"status\":\"waiting\",\"players\":%d,\"max\":%d}",
+                     game->player_count, game->max_players);
+            send_http(fd, body);
+            return;
+        }
+        send_http(fd, "{\"ok\":true,\"status\":\"waiting\",\"players\":0,\"max\":0}");
         return;
     }
 
