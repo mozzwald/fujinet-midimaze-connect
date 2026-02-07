@@ -1,6 +1,6 @@
 # MIDIMaze Server
 
-Lobby + game relay server for MIDIMaze NetStream. The lobby uses JSON‑lines over TCP. When a game is full, the server spawns a game thread on a dedicated port and closes the lobby connection to those players.
+HTTP lobby + game relay server for MIDIMaze NetStream.
 
 ## Build
 From repo root:
@@ -32,76 +32,64 @@ drop_timeout_sec=15
 ./build/mmsrv /path/to/server.cfg
 ```
 
-## Lobby Protocol (JSON‑Lines)
-Each request/response is one JSON object per line.
+## Lobby API (HTTP GET)
+Responses are JSON.
 
-### Client Hello
-Client must send name first. Name must be alphanumeric and max 8 chars.
-
-Request:
-```json
-{"cmd":"hello","name":"ALICE"}
-```
+### Hello
+`/hello?name=ALICE`
 
 Response:
 ```json
-{"ok":true,"name":"ALICE"}
+{"ok":true,"client_id":"ABC12345","name":"ALICE"}
 ```
 
 ### List Games
-Request:
-```json
-{"cmd":"list"}
-```
+`/list?client_id=ABC12345`
 
 Response:
 ```json
-{"ok":true,"games":[{"id":"ABC12345","name":"Game","players":2,"max":4,"active":false,"player_names":["ALICE","BOB"]}]}
+{"ok":true,"games":[{"id":"G1","name":"Game","players":2,"max":4,"active":false}]}
 ```
 
 ### Create Game
-Request:
-```json
-{"cmd":"create","name":"Ring 1","max_players":8}
-```
+`/create?client_id=ABC12345&name=Ring%201&max_players=8`
 
 Response:
 ```json
-{"ok":true,"game_id":"ABC12345","status":"waiting"}
+{"ok":true,"game_id":"G1","status":"waiting"}
 ```
 
 ### Join Game
-Request:
-```json
-{"cmd":"join","game_id":"ABC12345"}
-```
+`/join?client_id=ABC12345&game_id=G1`
 
 Response:
 ```json
 {"ok":true,"status":"waiting"}
 ```
 
-When a game fills, the server responds with `start` and closes the lobby connection:
-```json
-{"cmd":"start","host":"your.dns.name","port":5123,"token":"T0K3N123"}
-```
-
 ### Leave Game
-Request:
-```json
-{"cmd":"leave","game_id":"ABC12345"}
-```
+`/leave?client_id=ABC12345&game_id=G1`
 
 Response:
 ```json
 {"ok":true}
 ```
 
-### Heartbeat
-Request:
+### Wait For Start (poll)
+`/wait?client_id=ABC12345`
+
+If ready:
 ```json
-{"cmd":"heartbeat"}
+{"cmd":"start","host":"your.dns.name","port":5123,"token":""}
 ```
+
+If waiting:
+```json
+{"ok":true,"status":"waiting"}
+```
+
+### Ping
+`/ping?client_id=ABC12345`
 
 Response:
 ```json

@@ -65,8 +65,7 @@ typedef struct
     Screen screen;
     char status[40];
     uint8_t focus;
-    bool lobby_connected;
-    char devicespec[64];
+    char client_id[GAME_ID_LEN + 1];
     char current_game_id[GAME_ID_LEN + 1];
     char start_host[HOSTNAME_MAX_LEN + 1];
     uint16_t start_port;
@@ -96,6 +95,9 @@ static const char *g_p = NULL;
 static const char *g_idp = NULL;
 static const char *g_obj_start = NULL;
 static const char *g_obj_end = NULL;
+static char g_devicespec[96];
+static char g_url[128];
+static const char g_hex[] = "0123456789ABCDEF";
 
 static uint32_t rtclok_now(void)
 {
@@ -286,74 +288,73 @@ static void draw_wait_screen(const char *game_id)
     set_status("Waiting for lobby start...");
 }
 
-static void lobby_build_devicespec(AppState *state)
+static void url_encode(const char *src, char *dst, size_t dst_len)
 {
-    snprintf(state->devicespec, sizeof(state->devicespec), "N1:TCP://%s:%s/",
-             state->cfg.lobby_host, state->cfg.lobby_port);
-}
-
-static bool lobby_open(AppState *state)
-{
-    lobby_build_devicespec(state);
-    if (network_open(state->devicespec, 12, 0) != 0)
-        return false;
-    state->lobby_connected = true;
-    return true;
-}
-
-static void lobby_close(AppState *state)
-{
-    if (!state->lobby_connected)
-        return;
-    network_close(state->devicespec);
-    state->lobby_connected = false;
-}
-
-static bool lobby_send(AppState *state, const char *line)
-{
-    uint16_t len = (uint16_t)strlen(line);
-    if (network_write(state->devicespec, (const uint8_t *)line, len) != 0)
-        return false;
-    return true;
-}
-
-static bool lobby_read_line(AppState *state, char *out, size_t out_len, uint32_t timeout_ticks)
-{
-    static char rx_buf[256];
-    static uint16_t rx_len = 0;
-    int16_t r;
-    char *nl;
-    size_t line_len;
-    uint32_t start = rtclok_now();
-
-    while (rtclok_diff(rtclok_now(), start) < timeout_ticks)
+    size_t used = 0;
+    while (*src && used + 1 < dst_len)
     {
-        if (rx_len >= sizeof(rx_buf))
-            rx_len = 0;
+        unsigned char c = (unsigned char)*src++;
+        if (isalnum(c) || c == '-' || c == '_' || c == '.')
+        {
+            dst[used++] = (char)c;
+        }
+        else if (c == ' ')
+        {
+            if (used + 3 >= dst_len)
+                break;
+            dst[used++] = '%';
+            dst[used++] = '2';
+            dst[used++] = '0';
+        }
+        else
+        {
+            if (used + 3 >= dst_len)
+                break;
+            dst[used++] = '%';
+            dst[used++] = g_hex[(c >> 4) & 0xF];
+            dst[used++] = g_hex[c & 0xF];
+        }
+    }
+    dst[used] = '\0';
+}
 
-        r = network_read_nb(state->devicespec, (uint8_t *)rx_buf + rx_len,
-                            (uint16_t)(sizeof(rx_buf) - rx_len - 1));
+static bool http_get_json(const char *path, char *out, size_t out_len)
+{
+    uint32_t start;
+    size_t used = 0;
+    char *body;
+    int16_t r;
+
+    snprintf(g_devicespec, sizeof(g_devicespec), "N1:HTTP://%s:%s%s",
+             g_state.cfg.lobby_host, g_state.cfg.lobby_port, path);
+
+    if (network_open(g_devicespec, 4, 0) != 0)
+        return false;
+
+    start = rtclok_now();
+    out[0] = '\0';
+
+    while (rtclok_diff(rtclok_now(), start) < 200)
+    {
+        r = network_read_nb(g_devicespec, (uint8_t *)out + used, (uint16_t)(out_len - used - 1));
         if (r > 0)
         {
-            rx_len += (uint16_t)r;
-            rx_buf[rx_len] = '\0';
-            nl = strchr(rx_buf, '\n');
-            if (nl)
-            {
-                line_len = (size_t)(nl - rx_buf);
-                if (line_len >= out_len)
-                    line_len = out_len - 1;
-                memcpy(out, rx_buf, line_len);
-                out[line_len] = '\0';
-                memmove(rx_buf, nl + 1, rx_len - (uint16_t)(line_len + 1));
-                rx_len -= (uint16_t)(line_len + 1);
-                return true;
-            }
+            used += (size_t)r;
+            out[used] = '\0';
         }
-        if (kbhit())
-            return false;
+        if (r <= 0 && used > 0)
+            break;
     }
-    return false;
+
+    network_close(g_devicespec);
+
+    body = strstr(out, "\r\n\r\n");
+    if (body)
+    {
+        body += 4;
+        memmove(out, body, strlen(body) + 1);
+    }
+    return true;
 }
 
 static bool json_get_string(const char *json, const char *key, char *out, size_t out_len)
@@ -432,6 +433,7 @@ static bool json_get_bool(const char *json, const char *key, bool *out)
 static uint8_t parse_games_list(const char *json, GameEntry *out, uint8_t max_out)
 {
     uint8_t count = 0;
+
     g_p = strstr(json, "\"games\"");
     if (!g_p)
         return 0;
@@ -619,26 +621,18 @@ int main(void)
 
                 clrscr();
                 cprintf("Connecting lobby...");
-                if (!lobby_open(&g_state))
+
+                url_encode(g_state.cfg.player_name, g_url, sizeof(g_url));
+                snprintf(g_line, sizeof(g_line), "/hello?name=%s", g_url);
+                if (!http_get_json(g_line, g_line, sizeof(g_line)))
                 {
                     set_status("Lobby connect failed");
                     draw_config_screen(&g_state);
                     continue;
                 }
-
-                snprintf(g_line, sizeof(g_line), "{\"cmd\":\"hello\",\"name\":\"%s\"}\n", g_state.cfg.player_name);
-                if (!lobby_send(&g_state, g_line))
+                if (!json_get_string(g_line, "client_id", g_state.client_id, sizeof(g_state.client_id)))
                 {
-                    set_status("Lobby write failed");
-                    lobby_close(&g_state);
-                    draw_config_screen(&g_state);
-                    continue;
-                }
-
-                if (!lobby_read_line(&g_state, g_line, sizeof(g_line), 200))
-                {
-                    set_status("No lobby response");
-                    lobby_close(&g_state);
+                    set_status("Lobby response bad");
                     draw_config_screen(&g_state);
                     continue;
                 }
@@ -655,8 +649,8 @@ int main(void)
             g_now = rtclok_now();
             if (g_last_refresh == 0 || rtclok_diff(g_now, g_last_refresh) >= LIST_REFRESH_TICKS)
             {
-                lobby_send(&g_state, "{\"cmd\":\"list\"}\n");
-                if (lobby_read_line(&g_state, g_line, sizeof(g_line), 200))
+                snprintf(g_line, sizeof(g_line), "/list?client_id=%s", g_state.client_id);
+                if (http_get_json(g_line, g_line, sizeof(g_line)))
                 {
                     g_game_count = parse_games_list(g_line, g_games, MAX_GAMES);
                     if (g_selected >= g_game_count)
@@ -696,9 +690,9 @@ int main(void)
             }
             if (g_key == CH_ENTER && g_game_count > 0)
             {
-                snprintf(g_line, sizeof(g_line), "{\"cmd\":\"join\",\"game_id\":\"%s\"}\n", g_games[g_selected].id);
-                lobby_send(&g_state, g_line);
-                if (lobby_read_line(&g_state, g_line, sizeof(g_line), 200))
+                snprintf(g_line, sizeof(g_line), "/join?client_id=%s&game_id=%s", g_state.client_id,
+                         g_games[g_selected].id);
+                if (http_get_json(g_line, g_line, sizeof(g_line)))
                 {
                     snprintf(g_state.current_game_id, sizeof(g_state.current_game_id), "%s", g_games[g_selected].id);
                     g_state.screen = SCREEN_WAIT;
@@ -753,10 +747,10 @@ int main(void)
             }
             if (g_state.focus == 2 && g_key == CH_ENTER)
             {
-                snprintf(g_line, sizeof(g_line), "{\"cmd\":\"create\",\"name\":\"%s\",\"max_players\":%s}\n",
-                         g_game_name, g_game_max);
-                lobby_send(&g_state, g_line);
-                if (lobby_read_line(&g_state, g_line, sizeof(g_line), 200))
+                url_encode(g_game_name, g_url, sizeof(g_url));
+                snprintf(g_line, sizeof(g_line), "/create?client_id=%s&name=%s&max_players=%s",
+                         g_state.client_id, g_url, g_game_max);
+                if (http_get_json(g_line, g_line, sizeof(g_line)))
                 {
                     json_get_string(g_line, "game_id", g_state.current_game_id, sizeof(g_state.current_game_id));
                     g_state.screen = SCREEN_WAIT;
@@ -780,8 +774,9 @@ int main(void)
                 g_key = cgetc();
                 if (g_key == CH_ESC)
                 {
-                    snprintf(g_line, sizeof(g_line), "{\"cmd\":\"leave\",\"game_id\":\"%s\"}\n", g_state.current_game_id);
-                    lobby_send(&g_state, g_line);
+                    snprintf(g_line, sizeof(g_line), "/leave?client_id=%s&game_id=%s",
+                             g_state.client_id, g_state.current_game_id);
+                    http_get_json(g_line, g_line, sizeof(g_line));
                     g_state.screen = SCREEN_LIST;
                     draw_list_screen(g_games, g_game_count, g_selected);
                     continue;
@@ -790,11 +785,13 @@ int main(void)
 
             if (rtclok_diff(g_now, g_last_heartbeat) >= HEARTBEAT_TICKS)
             {
-                lobby_send(&g_state, "{\"cmd\":\"heartbeat\"}\n");
+                snprintf(g_line, sizeof(g_line), "/ping?client_id=%s", g_state.client_id);
+                http_get_json(g_line, g_line, sizeof(g_line));
                 g_last_heartbeat = g_now;
             }
 
-            if (lobby_read_line(&g_state, g_line, sizeof(g_line), 20))
+            snprintf(g_line, sizeof(g_line), "/wait?client_id=%s", g_state.client_id);
+            if (http_get_json(g_line, g_line, sizeof(g_line)))
             {
                 if (json_get_string(g_line, "cmd", g_cmd, sizeof(g_cmd)) && strcmp(g_cmd, "start") == 0)
                 {
@@ -802,7 +799,6 @@ int main(void)
                     g_port = 0;
                     json_get_int(g_line, "port", &g_port);
                     g_state.start_port = (uint16_t)g_port;
-                    lobby_close(&g_state);
 
                     clrscr();
                     cprintf("Starting game...");
@@ -820,5 +816,4 @@ int main(void)
             }
         }
     }
-
 }
