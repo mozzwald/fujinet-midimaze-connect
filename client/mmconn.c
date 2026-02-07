@@ -15,7 +15,7 @@
 #define HOSTNAME_MAX_LEN (HOST_BUF_LEN - 3)
 
 #define LOBBY_HOST_DEFAULT "fujinet.online"
-#define LOBBY_PORT_DEFAULT "5000"
+#define LOBBY_PORT_DEFAULT "5004"
 #define PLAYER_NAME_MAX 8
 
 #define UI_TITLE_Y 0
@@ -41,7 +41,8 @@ typedef enum
     SCREEN_CONFIG = 0,
     SCREEN_LIST,
     SCREEN_CREATE,
-    SCREEN_WAIT
+    SCREEN_WAIT,
+    SCREEN_HELP
 } Screen;
 
 typedef struct
@@ -64,6 +65,7 @@ typedef struct
 {
     LobbyConfig cfg;
     Screen screen;
+    Screen prev_screen;
     char status[40];
     uint8_t focus;
     char client_id[GAME_ID_LEN + 1];
@@ -116,11 +118,13 @@ static uint32_t rtclok_diff(uint32_t now, uint32_t then)
     return (0x1000000u - then + now);
 }
 
+#ifndef DISK
 static void atari_reset_warm(void)
 {
     *(volatile uint8_t *)0x08 = 0xFF;
     __asm__("jmp $E474");
 }
+#endif
 
 static uint16_t swap16(uint16_t value)
 {
@@ -142,6 +146,25 @@ static void build_host_buffer(const char *hostname, uint8_t flags, uint8_t audf3
         host_buf[len + 2] = (char)audf3;
     }
 }
+
+#ifdef DISK
+static void run_dos_command(const char *cmd)
+{
+    char *dosbuf = (char *)0x0480;
+    size_t i = 0;
+
+    while (cmd[i] != '\0' && i < 127)
+    {
+        dosbuf[i] = cmd[i];
+        i++;
+    }
+    dosbuf[i] = 0x9B; /* ATASCII EOL */
+    OS.fmszpg.zbufp = (unsigned char *)dosbuf;
+    OS.bufadr = (unsigned char *)dosbuf;
+    OS.bfen = (unsigned char *)(dosbuf + i + 1);
+    OS.dosvec();
+}
+#endif
 
 static void set_status(const char *msg)
 {
@@ -240,9 +263,9 @@ static void draw_list_screen(const GameEntry *games, uint8_t game_count, uint8_t
     uint8_t y;
     clrscr();
     gotoxy(0, UI_TITLE_Y);
-    cprintf("Lobby Games");
+    cprintf("MIDI Maze Game Lobby");
     gotoxy(0, 2);
-    cprintf("ARROWS/TAB move  R=Refresh  C=Create");
+    cprintf("\xD4\xC1\xC2 move  \xD2=Refresh  \xC3=Create");
 
     for (i = 0; i < game_count; i++)
     {
@@ -255,7 +278,7 @@ static void draw_list_screen(const GameEntry *games, uint8_t game_count, uint8_t
         cprintf("%s (%u/%u)%s", games[i].name, games[i].players, games[i].max_players,
                 games[i].active ? "*" : "");
     }
-    set_status(game_count ? "ENTER=Join  ESC=Back" : "No games yet");
+    set_status(game_count ? "\xC5\xCE\xD4\xC5\xD2=Join  \xC5\xD3\xC3=Back" : "No games yet");
 }
 
 static void draw_create_screen(const AppState *state, const char *game_name, const char *max_players, uint8_t focus)
@@ -263,19 +286,21 @@ static void draw_create_screen(const AppState *state, const char *game_name, con
     clrscr();
     gotoxy(0, UI_TITLE_Y);
     cprintf("Create Game");
+    gotoxy(0, 1);
+    cprintf("\xD4\xC1\xC2 move  \xC5\xCE\xD4\xC5\xD2 select");
 
-    gotoxy(0, 3);
+    gotoxy(0, 4);
     cprintf(focus == 0 ? "> Name: " : "  Name: ");
-    draw_field_value(8, 3, game_name, FIELD_WIDTH_GAME);
+    draw_field_value(8, 4, game_name, FIELD_WIDTH_GAME);
 
-    gotoxy(0, 5);
+    gotoxy(0, 6);
     cprintf(focus == 1 ? "> Max: " : "  Max: ");
-    draw_field_value(8, 5, max_players, 2);
+    draw_field_value(8, 6, max_players, 2);
 
-    gotoxy(0, 7);
+    gotoxy(0, 8);
     cprintf(focus == 2 ? "> [ CREATE ]" : "  [ CREATE ]");
 
-    gotoxy(0, 9);
+    gotoxy(0, 10);
     cprintf(focus == 3 ? "> [ BACK ]" : "  [ BACK ]");
 
     set_status(state->status);
@@ -285,14 +310,26 @@ static void draw_wait_screen(const char *game_name, uint8_t players, uint8_t max
 {
     clrscr();
     gotoxy(0, UI_TITLE_Y);
-    cprintf("Waiting for Players");
+    cprintf("Waiting for Players...");
     gotoxy(0, 3);
     cprintf("Game: %s", game_name);
     gotoxy(0, 4);
     cprintf("Players: %u of %u", players, max_players);
     gotoxy(0, 7);
-    cprintf("Press ESC to cancel");
+    cprintf("Press \xC5\xD3\xC3 to cancel");
     set_status("Waiting for lobby start...");
+}
+
+static void draw_help_screen(void)
+{
+    clrscr();
+    gotoxy(0, UI_TITLE_Y);
+    cprintf("MIDI Maze Connect Help - \xC5\xD3\xC3 go back");
+    gotoxy(0, 1);
+    printf("----------------------------------------");
+    printf("ohai!\n");
+    printf("Let's GO!\n");
+    printf("                                        ");
 }
 
 static void url_encode(const char *src, char *dst, size_t dst_len)
@@ -523,8 +560,10 @@ static bool start_netstream(const char *host, uint16_t port)
 
     if (!fuji_enable_udpstream(swap16(port), host_buf))
         return false;
-
+#ifndef DISK
+    fuji_unmount_disk_image(0);
     fuji_mount_all();
+#endif
     return true;
 }
 
@@ -536,8 +575,9 @@ int main(void)
     strncpy(g_state.cfg.lobby_port, LOBBY_PORT_DEFAULT, sizeof(g_state.cfg.lobby_port) - 1);
     g_state.cfg.player_name[0] = '\0';
     g_state.screen = SCREEN_CONFIG;
+    g_state.prev_screen = SCREEN_CONFIG;
     g_state.focus = 0;
-    strncpy(g_state.status, "TAB/ARROWS move, ENTER select", sizeof(g_state.status) - 1);
+    strncpy(g_state.status, "\xD4\xC1\xC2 move, \xC5\xCE\xD4\xC5\xD2 select", sizeof(g_state.status) - 1);
 
     draw_config_screen(&g_state);
 
@@ -546,13 +586,20 @@ int main(void)
         if (g_state.screen == SCREEN_CONFIG)
         {
             g_key = cgetc();
-            if (g_key == CH_TAB || g_key == CH_CURS_DOWN)
+            if ((g_key == 'h' || g_key == 'H' || g_key == KEY_HELP) && g_state.focus == 3)
+            {
+                g_state.prev_screen = g_state.screen;
+                g_state.screen = SCREEN_HELP;
+                draw_help_screen();
+                continue;
+            }
+            if (g_key == CH_TAB || g_key == CH_CURS_DOWN || g_key == CH_CURS_RIGHT)
             {
                 g_state.focus = (g_state.focus + 1) % 4;
                 draw_config_screen(&g_state);
                 continue;
             }
-            if (g_key == CH_CURS_UP)
+            if (g_key == CH_CURS_UP || g_key == CH_CURS_LEFT)
             {
                 g_state.focus = (g_state.focus == 0) ? 3 : (g_state.focus - 1);
                 draw_config_screen(&g_state);
@@ -670,6 +717,13 @@ int main(void)
             if (!kbhit())
                 continue;
             g_key = cgetc();
+            if (g_key == 'h' || g_key == 'H' || g_key == KEY_HELP)
+            {
+                g_state.prev_screen = g_state.screen;
+                g_state.screen = SCREEN_HELP;
+                draw_help_screen();
+                continue;
+            }
             if (g_key == 'r' || g_key == 'R')
             {
                 g_last_refresh = 0;
@@ -683,15 +737,29 @@ int main(void)
                 draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
                 continue;
             }
-            if ((g_key == CH_CURS_UP || g_key == CH_TAB) && g_selected > 0)
+            if (g_key == CH_TAB)
             {
-                g_selected--;
+                if (g_game_count > 0)
+                {
+                    if (g_selected + 1 < g_game_count)
+                        g_selected++;
+                    else
+                        g_selected = 0;
+                }
                 draw_list_screen(g_games, g_game_count, g_selected);
                 continue;
             }
-            if ((g_key == CH_CURS_DOWN || g_key == CH_TAB) && g_selected + 1 < g_game_count)
+            if (g_key == CH_CURS_UP)
             {
-                g_selected++;
+                if (g_selected > 0)
+                    g_selected--;
+                draw_list_screen(g_games, g_game_count, g_selected);
+                continue;
+            }
+            if (g_key == CH_CURS_DOWN)
+            {
+                if (g_selected + 1 < g_game_count)
+                    g_selected++;
                 draw_list_screen(g_games, g_game_count, g_selected);
                 continue;
             }
@@ -703,6 +771,11 @@ int main(void)
             }
             if (g_key == CH_ENTER && g_game_count > 0)
             {
+                if (g_games[g_selected].active || g_games[g_selected].players >= g_games[g_selected].max_players)
+                {
+                    set_status("Game is full.");
+                    continue;
+                }
                 snprintf(g_line, sizeof(g_line), "/join?client_id=%s&game_id=%s", g_state.client_id,
                          g_games[g_selected].id);
                 if (http_get_json(g_line, g_line, sizeof(g_line)))
@@ -722,13 +795,20 @@ int main(void)
         else if (g_state.screen == SCREEN_CREATE)
         {
             g_key = cgetc();
-            if (g_key == CH_TAB || g_key == CH_CURS_DOWN)
+            if ((g_key == 'h' || g_key == 'H' || g_key == KEY_HELP) && g_state.focus >= 2)
+            {
+                g_state.prev_screen = g_state.screen;
+                g_state.screen = SCREEN_HELP;
+                draw_help_screen();
+                continue;
+            }
+            if (g_key == CH_TAB || g_key == CH_CURS_DOWN || g_key == CH_CURS_RIGHT)
             {
                 g_state.focus = (g_state.focus + 1) % 4;
                 draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
                 continue;
             }
-            if (g_key == CH_CURS_UP)
+            if (g_key == CH_CURS_UP || g_key == CH_CURS_LEFT)
             {
                 g_state.focus = (g_state.focus == 0) ? 3 : (g_state.focus - 1);
                 draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
@@ -744,7 +824,7 @@ int main(void)
                 else
                 {
                     handle_text_input(g_game_name, sizeof(g_game_name), g_key, false);
-                    draw_field_value(8, 3, g_game_name, FIELD_WIDTH_GAME);
+    draw_field_value(8, 4, g_game_name, FIELD_WIDTH_GAME);
                 }
                 continue;
             }
@@ -758,7 +838,7 @@ int main(void)
                 else
                 {
                     handle_text_input(g_game_max, sizeof(g_game_max), g_key, true);
-                    draw_field_value(8, 5, g_game_max, 2);
+    draw_field_value(8, 6, g_game_max, 2);
                 }
                 continue;
             }
@@ -793,6 +873,13 @@ int main(void)
             if (kbhit())
             {
                 g_key = cgetc();
+                if (g_key == 'h' || g_key == 'H' || g_key == KEY_HELP)
+                {
+                    g_state.prev_screen = g_state.screen;
+                    g_state.screen = SCREEN_HELP;
+                    draw_help_screen();
+                    continue;
+                }
                 if (g_key == CH_ESC)
                 {
                     snprintf(g_line, sizeof(g_line), "/leave?client_id=%s&game_id=%s",
@@ -818,9 +905,10 @@ int main(void)
             {
                 if (json_get_string(g_line, "error", g_cmd, sizeof(g_cmd)) && strcmp(g_cmd, "not_found") == 0)
                 {
-                    g_state.screen = SCREEN_CONFIG;
+                    g_state.screen = SCREEN_LIST;
                     strncpy(g_state.status, "Game timed out.", sizeof(g_state.status) - 1);
-                    draw_config_screen(&g_state);
+                    g_last_refresh = 0;
+                    draw_list_screen(g_games, g_game_count, g_selected);
                     continue;
                 }
                 if (json_get_string(g_line, "cmd", g_cmd, sizeof(g_cmd)) && strcmp(g_cmd, "start") == 0)
@@ -835,7 +923,12 @@ int main(void)
                     if (start_netstream(g_state.start_host, g_state.start_port))
                     {
                         cprintf("Done!\n");
+#ifndef DISK
                         atari_reset_warm();
+#else
+                        run_dos_command("L D1:MIDIMAZE.XEX");
+                        return 0;
+#endif
                     }
                     else
                     {
@@ -851,6 +944,22 @@ int main(void)
                 }
             }
                 g_last_wait_poll = g_now;
+            }
+        }
+        else if (g_state.screen == SCREEN_HELP)
+        {
+            g_key = cgetc();
+            if (g_key == CH_ESC || g_key == 'h' || g_key == 'H' || g_key == KEY_HELP)
+            {
+                g_state.screen = g_state.prev_screen;
+                if (g_state.screen == SCREEN_CONFIG)
+                    draw_config_screen(&g_state);
+                else if (g_state.screen == SCREEN_LIST)
+                    draw_list_screen(g_games, g_game_count, g_selected);
+                else if (g_state.screen == SCREEN_CREATE)
+                    draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
+                else if (g_state.screen == SCREEN_WAIT)
+                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max);
             }
         }
     }
