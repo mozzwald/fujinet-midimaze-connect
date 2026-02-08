@@ -80,7 +80,7 @@ static GameEntry g_games[MAX_GAMES];
 static uint8_t g_game_count = 0;
 static uint8_t g_selected = 0;
 static char g_game_name[GAME_NAME_MAX + 1] = "Game";
-static char g_game_max[3] = "10";
+static char g_game_max[3] = "2";
 static char g_line[256];
 static char g_cmd[16];
 static uint32_t g_last_refresh = 0;
@@ -118,13 +118,11 @@ static uint32_t rtclok_diff(uint32_t now, uint32_t then)
     return (0x1000000u - then + now);
 }
 
-#ifndef DISK
 static void atari_reset_warm(void)
 {
     *(volatile uint8_t *)0x08 = 0xFF;
     __asm__("jmp $E474");
 }
-#endif
 
 static uint16_t swap16(uint16_t value)
 {
@@ -146,25 +144,6 @@ static void build_host_buffer(const char *hostname, uint8_t flags, uint8_t audf3
         host_buf[len + 2] = (char)audf3;
     }
 }
-
-#ifdef DISK
-static void run_dos_command(const char *cmd)
-{
-    char *dosbuf = (char *)0x0480;
-    size_t i = 0;
-
-    while (cmd[i] != '\0' && i < 127)
-    {
-        dosbuf[i] = cmd[i];
-        i++;
-    }
-    dosbuf[i] = 0x9B; /* ATASCII EOL */
-    OS.fmszpg.zbufp = (unsigned char *)dosbuf;
-    OS.bufadr = (unsigned char *)dosbuf;
-    OS.bfen = (unsigned char *)(dosbuf + i + 1);
-    OS.dosvec();
-}
-#endif
 
 static void set_status(const char *msg)
 {
@@ -294,8 +273,8 @@ static void draw_create_screen(const AppState *state, const char *game_name, con
     draw_field_value(8, 4, game_name, FIELD_WIDTH_GAME);
 
     gotoxy(0, 6);
-    cprintf(focus == 1 ? "> Max: " : "  Max: ");
-    draw_field_value(8, 6, max_players, 2);
+    cprintf(focus == 1 ? "> Max Players: " : "  Max Players: ");
+    draw_field_value(15, 6, max_players, 2);
 
     gotoxy(0, 8);
     cprintf(focus == 2 ? "> [ CREATE ]" : "  [ CREATE ]");
@@ -327,7 +306,7 @@ static void draw_help_screen(void)
     cprintf("MIDI Maze Connect Help - \xC5\xD3\xC3 go back");
     gotoxy(0, 1);
     printf("----------------------------------------");
-    printf("ohai!\n");
+    printf("HELP coming soon\n");
     printf("Let's GO!\n");
     printf("                                        ");
 }
@@ -562,15 +541,15 @@ static bool start_netstream(const char *host, uint16_t port)
         return false;
 #ifndef DISK
     fuji_unmount_disk_image(0);
-    fuji_mount_all();
 #endif
+    fuji_mount_all();
     return true;
 }
 
 int main(void)
 {
+    void (*saveVVBLKI)(void);
     memset(&g_state, 0, sizeof(g_state));
-
     strncpy(g_state.cfg.lobby_host, LOBBY_HOST_DEFAULT, sizeof(g_state.cfg.lobby_host) - 1);
     strncpy(g_state.cfg.lobby_port, LOBBY_PORT_DEFAULT, sizeof(g_state.cfg.lobby_port) - 1);
     g_state.cfg.player_name[0] = '\0';
@@ -578,6 +557,11 @@ int main(void)
     g_state.prev_screen = SCREEN_CONFIG;
     g_state.focus = 0;
     strncpy(g_state.status, "\xD4\xC1\xC2 move, \xC5\xCE\xD4\xC5\xD2 select", sizeof(g_state.status) - 1);
+
+    /* Setup screen */
+    saveVVBLKI = OS.vvblki;
+    OS.vvblki = (void (*)(void))0xE45F;
+    OS.sdmctl = 0x22;
 
     draw_config_screen(&g_state);
 
@@ -838,7 +822,7 @@ int main(void)
                 else
                 {
                     handle_text_input(g_game_max, sizeof(g_game_max), g_key, true);
-    draw_field_value(8, 6, g_game_max, 2);
+                    draw_field_value(15, 6, g_game_max, 2);
                 }
                 continue;
             }
@@ -923,12 +907,7 @@ int main(void)
                     if (start_netstream(g_state.start_host, g_state.start_port))
                     {
                         cprintf("Done!\n");
-#ifndef DISK
                         atari_reset_warm();
-#else
-                        run_dos_command("L D1:MIDIMAZE.XEX");
-                        return 0;
-#endif
                     }
                     else
                     {
