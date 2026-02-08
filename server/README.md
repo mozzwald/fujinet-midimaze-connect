@@ -24,6 +24,7 @@ max_games=5
 max_players_default=10
 join_timeout_sec=600
 drop_timeout_sec=15
+idle_timeout_sec=600
 ```
 
 ## Run
@@ -104,4 +105,5 @@ Response:
 ## Behavior Notes
 - Pending games expire after `join_timeout_sec`.
 - If any client drops during a game, the game ends after `drop_timeout_sec`.
+- Active games with no traffic end after `idle_timeout_sec`.
 - When a game ends, its lobby listing is removed.

@@ -26,6 +26,7 @@
 #define DEFAULT_MAX_PLAYERS 10
 #define DEFAULT_JOIN_TIMEOUT_SEC 600
 #define DEFAULT_DROP_TIMEOUT_SEC 15
+#define DEFAULT_IDLE_TIMEOUT_SEC 600
 
 typedef struct
 {
@@ -37,6 +38,7 @@ typedef struct
     int max_players_default;
     int join_timeout_sec;
     int drop_timeout_sec;
+    int idle_timeout_sec;
 } ServerConfig;
 
 typedef struct
@@ -146,6 +148,7 @@ static bool load_config(const char *path, ServerConfig *cfg)
     cfg->max_players_default = DEFAULT_MAX_PLAYERS;
     cfg->join_timeout_sec = DEFAULT_JOIN_TIMEOUT_SEC;
     cfg->drop_timeout_sec = DEFAULT_DROP_TIMEOUT_SEC;
+    cfg->idle_timeout_sec = DEFAULT_IDLE_TIMEOUT_SEC;
 
     char line[512];
     while (fgets(line, sizeof(line), f))
@@ -196,6 +199,12 @@ static bool load_config(const char *path, ServerConfig *cfg)
             if (parse_int(value, &v))
                 cfg->drop_timeout_sec = v;
         }
+        else if (strcmp(key, "idle_timeout_sec") == 0)
+        {
+            int v = 0;
+            if (parse_int(value, &v))
+                cfg->idle_timeout_sec = v;
+        }
     }
 
     fclose(f);
@@ -221,6 +230,8 @@ static bool validate_config(const ServerConfig *cfg)
     if (cfg->join_timeout_sec <= 0)
         return false;
     if (cfg->drop_timeout_sec <= 0)
+        return false;
+    if (cfg->idle_timeout_sec <= 0)
         return false;
     return true;
 }
@@ -369,6 +380,7 @@ static void *game_thread(void *arg)
     }
 
     uint64_t drop_deadline = (uint64_t)time(NULL) * 1000u + (uint64_t)g_cfg.drop_timeout_sec * 1000u;
+    uint64_t last_activity_ms = (uint64_t)time(NULL) * 1000u;
 
     while (1)
     {
@@ -403,6 +415,12 @@ static void *game_thread(void *arg)
         if (drop_deadline > 0 && now_ms >= drop_deadline)
         {
             printf("Game %s ended due to drop timeout\n", game->id);
+            break;
+        }
+        if (g_cfg.idle_timeout_sec > 0 &&
+            now_ms - last_activity_ms >= (uint64_t)g_cfg.idle_timeout_sec * 1000u)
+        {
+            printf("Game %s ended due to idle timeout\n", game->id);
             break;
         }
 
@@ -443,6 +461,7 @@ static void *game_thread(void *arg)
                             close(fds[slot]);
                         fds[slot] = client_fd;
                         connected[slot] = true;
+                        last_activity_ms = now_ms;
 
                         bool all_connected = true;
                         for (int s = 0; s < max_players; s++)
@@ -478,6 +497,7 @@ static void *game_thread(void *arg)
                     drop_deadline = now_ms + (uint64_t)g_cfg.drop_timeout_sec * 1000u;
                 continue;
             }
+            last_activity_ms = now_ms;
 
             bool all_connected = true;
             for (int s = 0; s < max_players; s++)
