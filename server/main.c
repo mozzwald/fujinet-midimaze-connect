@@ -532,6 +532,23 @@ static void start_game_locked(Game *game)
     game->port = port;
     game->active = true;
 
+    {
+        char ts[32];
+        time_t now = time(NULL);
+        struct tm tm_now;
+        localtime_r(&now, &tm_now);
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_now);
+        printf("%s Game start id=%s name=\"%s\" port=%d players=%d names=",
+               ts, game->id, game->name, game->port, game->player_count);
+        for (int i = 0; i < game->player_count; i++)
+        {
+            if (i > 0)
+                printf(",");
+            printf("%s", game->player_names[i]);
+        }
+        printf("\n");
+    }
+
     GameThreadArgs *args = calloc(1, sizeof(GameThreadArgs));
     args->game = game;
     args->cfg = &g_cfg;
@@ -569,6 +586,11 @@ static void expire_pending_games(void)
             continue;
         if ((now - game->created_at) > g_cfg.join_timeout_sec)
         {
+            char ts[32];
+            struct tm tm_now;
+            localtime_r(&now, &tm_now);
+            strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tm_now);
+            printf("%s Game timeout id=%s name=\"%s\"\n", ts, game->id, game->name);
             game->in_use = false;
         }
     }
