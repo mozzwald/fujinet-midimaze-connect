@@ -34,6 +34,11 @@
 #define GAME_ID_LEN 8
 #define GAME_NAME_MAX 32
 
+// App Key Details
+#define CREATOR_ID 0x3022
+#define APP_ID 0x02
+#define TOKEN_KEY_ID 0x01
+
 void (*saveVVBLKI)(void);
 static char host_buf[HOST_BUF_LEN];
 
@@ -245,7 +250,7 @@ static void draw_list_screen(const GameEntry *games, uint8_t game_count, uint8_t
     gotoxy(0, UI_TITLE_Y);
     cprintf("MIDI Maze Game Lobby");
     gotoxy(0, 2);
-    cprintf("\xD4\xC1\xC2 move  \xD2=Refresh  \xC3=Create");
+    cprintf("\xD4\xC1\xC2 move  \xD2=Refresh  \xC3=Create  \xC8=Help");
 
     for (i = 0; i < game_count; i++)
     {
@@ -307,9 +312,27 @@ static void draw_help_screen(void)
     cprintf("MIDI Maze Connect Help - \xC5\xD3\xC3 go back");
     gotoxy(0, 1);
     printf("----------------------------------------");
-    printf("HELP coming soon\n");
-    printf("Let's GO!\n");
-    printf("                                        ");
+    printf("Lobby can create new game or join them.\n");
+    printf("Game list shows how many players are in\n");
+    printf("game. (1/2) means you can join game and\n");
+    printf("(5/5)* game is full. The game can't\n");
+    printf("begin until all players are ready. When\n");
+    printf("joining, the app will wait for full\n");
+    printf("roster then start game. After the game\n");
+    printf("finishes loading choose MIDIMATE from\n");
+    printf("menu. Last player to choose it becomes\n");
+    printf("master and chooses game options. If a\n");
+    printf("timeout error occurs in game you can\n");
+    printf("select MIDIMATE again to start over\n");
+    printf("without returning to lobby. \n");
+    printf("\n");
+    printf("\n");
+    printf("\n");
+    printf("\n");
+    printf("\n");
+    printf("\n");
+    printf("\n");
+    printf("\n");
 }
 
 static void url_encode(const char *src, char *dst, size_t dst_len)
@@ -547,8 +570,53 @@ static bool start_netstream(const char *host, uint16_t port)
     return true;
 }
 
+static void appkey_prefill_player_name(char *out_name, size_t out_len)
+{
+    uint8_t data[MAX_APPKEY_LEN + 2];
+    uint16_t count = 0;
+    size_t len = 0;
+    size_t i;
+
+    if (!fuji_read_appkey(TOKEN_KEY_ID, &count, data))
+        return;
+
+    if (count >= sizeof(data))
+        count = sizeof(data) - 1;
+    data[count] = 0;
+
+    while (len < sizeof(data) && data[len] != 0)
+        len++;
+
+    if (len == 0 || len > PLAYER_NAME_MAX)
+        return;
+
+    for (i = 0; i < len; ++i)
+    {
+        if (!is_alnum((char)data[i]))
+            return;
+    }
+
+    strncpy(out_name, (char *)data, out_len - 1);
+    out_name[out_len - 1] = '\0';
+}
+
+static void appkey_save_player_name(const char *name)
+{
+    uint8_t data[MAX_APPKEY_LEN];
+    size_t len = strlen(name);
+
+    if (len >= sizeof(data))
+        len = sizeof(data) - 1;
+
+    memcpy(data, name, len);
+    data[len] = '\0';
+
+    fuji_write_appkey(TOKEN_KEY_ID, (uint16_t)(len + 1), data);
+}
+
 int main(void)
 {
+    bool has_saved_name = false;
     memset(&g_state, 0, sizeof(g_state));
     strncpy(g_state.cfg.lobby_host, LOBBY_HOST_DEFAULT, sizeof(g_state.cfg.lobby_host) - 1);
     strncpy(g_state.cfg.lobby_port, LOBBY_PORT_DEFAULT, sizeof(g_state.cfg.lobby_port) - 1);
@@ -556,14 +624,27 @@ int main(void)
     g_state.screen = SCREEN_CONFIG;
     g_state.prev_screen = SCREEN_CONFIG;
     g_state.focus = 0;
-    strncpy(g_state.status, "\xD4\xC1\xC2 move, \xC5\xCE\xD4\xC5\xD2 select", sizeof(g_state.status) - 1);
+    strncpy(g_state.status, "\xD4\xC1\xC2 move, \xC5\xCE\xD4\xC5\xD2 select, \xC8=Help", sizeof(g_state.status) - 1);
+
+    fuji_set_appkey_details(CREATOR_ID, APP_ID, DEFAULT);
+    appkey_prefill_player_name(g_state.cfg.player_name, sizeof(g_state.cfg.player_name));
+    has_saved_name = (g_state.cfg.player_name[0] != '\0');
 
     /* Setup screen */
     saveVVBLKI = OS.vvblki;
     OS.vvblki = (void (*)(void))0xE45F;
     OS.sdmctl = 0x22;
 
-    draw_config_screen(&g_state);
+    if (has_saved_name)
+    {
+        draw_config_screen(&g_state);
+    }
+    else
+    {
+        g_state.prev_screen = SCREEN_CONFIG;
+        g_state.screen = SCREEN_HELP;
+        draw_help_screen();
+    }
 
     while (1)
     {
@@ -650,6 +731,8 @@ int main(void)
                     set_status("Name required");
                     continue;
                 }
+
+                appkey_save_player_name(g_state.cfg.player_name);
 
                 if (network_init() != 0)
                 {
