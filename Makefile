@@ -51,6 +51,7 @@ $(BUILD_DIR)/$(CART_PROGRAM).xex: $(BUILD_DIR)/mmconn.cart.o | $(BUILD_DIR)
 
 $(BUILD_DIR)/$(DISK_PROGRAM).xex: $(BUILD_DIR)/mmconn.disk.o | $(BUILD_DIR)
 	$(CC) $(LDFLAGS) -m $(BUILD_DIR)/$(DISK_PROGRAM).map -o $@ $^ $(FUJINET_LIB)
+	python3 tools/fix_runad.py $@
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

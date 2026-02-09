@@ -34,6 +34,7 @@
 #define GAME_ID_LEN 8
 #define GAME_NAME_MAX 32
 
+void (*saveVVBLKI)(void);
 static char host_buf[HOST_BUF_LEN];
 
 typedef enum
@@ -548,7 +549,6 @@ static bool start_netstream(const char *host, uint16_t port)
 
 int main(void)
 {
-    void (*saveVVBLKI)(void);
     memset(&g_state, 0, sizeof(g_state));
     strncpy(g_state.cfg.lobby_host, LOBBY_HOST_DEFAULT, sizeof(g_state.cfg.lobby_host) - 1);
     strncpy(g_state.cfg.lobby_port, LOBBY_PORT_DEFAULT, sizeof(g_state.cfg.lobby_port) - 1);
@@ -907,7 +907,12 @@ int main(void)
                     if (start_netstream(g_state.start_host, g_state.start_port))
                     {
                         cprintf("Done!\n");
+#ifdef DISK
+                        OS.vvblki = saveVVBLKI;
+                        return 0;
+#else
                         atari_reset_warm();
+#endif
                     }
                     else
                     {
