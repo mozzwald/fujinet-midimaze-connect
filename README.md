@@ -3,7 +3,8 @@
 Small Atari 8‑bit helper that starts a FujiNet NetStream connection for MIDIMaze and then boots into the game.
 
 ## What It Does
-- Prompts for host, port, transport, and REGISTER flag
+- Prompts for host, port, and player name for lobby login
+- Lets players create games with transport choice (`TCP` default, optional `UDP`)
 - Sends the FUJICMD_ENABLE_UDPSTREAM command with netstream compatible payload
 - Mounts FujiNet devices, then warm‑resets so the cart or XEX can boot
 
@@ -27,7 +28,7 @@ Build outputs:
 - If using disk based MIDI Maze, mount it into D1.
 - Reset FujiNet and Atari (insert cartridge)
 - Enter host and port in the program
-- Choose transport (TCP/UDP) and whether to send REGISTER.
+- In Create Game, choose transport (`TCP` default or `UDP`).
 - Select **CONNECT**.
 
 ## Server
@@ -44,6 +45,9 @@ max_games=5
 max_players_default=10
 join_timeout_sec=600
 drop_timeout_sec=15
+idle_timeout_sec=600
+udp_dup_enabled=1
+udp_dup_delay_ms=15
 ```
 
 Run:

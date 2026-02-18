@@ -65,6 +65,7 @@ typedef struct
     uint8_t players;
     uint8_t max_players;
     bool active;
+    bool udp;
 } GameEntry;
 
 typedef struct
@@ -79,6 +80,7 @@ typedef struct
     char current_game_name[GAME_NAME_MAX + 1];
     char start_host[HOSTNAME_MAX_LEN + 1];
     uint16_t start_port;
+    bool start_udp;
 } AppState;
 
 static AppState g_state;
@@ -87,6 +89,7 @@ static uint8_t g_game_count = 0;
 static uint8_t g_selected = 0;
 static char g_game_name[GAME_NAME_MAX + 1] = "Game";
 static char g_game_max[3] = "2";
+static bool g_game_udp = false;
 static char g_line[256];
 static char g_cmd[16];
 static uint32_t g_last_refresh = 0;
@@ -106,11 +109,12 @@ static const char *g_p = NULL;
 static const char *g_idp = NULL;
 static const char *g_obj_start = NULL;
 static const char *g_obj_end = NULL;
-static char g_devicespec[96];
+static char g_devicespec[256];
 static char g_url[128];
 static const char g_hex[] = "0123456789ABCDEF";
 static uint8_t g_wait_players = 0;
 static uint8_t g_wait_max = 0;
+static bool g_wait_udp = false;
 
 static uint32_t rtclok_now(void)
 {
@@ -266,13 +270,14 @@ static void draw_list_screen(const GameEntry *games, uint8_t game_count, uint8_t
     set_status(game_count ? "\xC5\xCE\xD4\xC5\xD2=Join  \xC5\xD3\xC3=Back" : "No games yet");
 }
 
-static void draw_create_screen(const AppState *state, const char *game_name, const char *max_players, uint8_t focus)
+static void draw_create_screen(const AppState *state, const char *game_name, const char *max_players, bool udp_mode,
+                               uint8_t focus)
 {
     clrscr();
     gotoxy(0, UI_TITLE_Y);
     cprintf("Create Game");
     gotoxy(0, 1);
-    cprintf("\xD4\xC1\xC2 move  \xC5\xCE\xD4\xC5\xD2 select");
+    cprintf("\xD4\xC1\xC2 move  \xC5\xCE\xD4\xC5\xD2 select  \x9E\x9F toggle");
 
     gotoxy(0, 4);
     cprintf(focus == 0 ? "> Name: " : "  Name: ");
@@ -283,15 +288,19 @@ static void draw_create_screen(const AppState *state, const char *game_name, con
     draw_field_value(15, 6, max_players, 2);
 
     gotoxy(0, 8);
-    cprintf(focus == 2 ? "> [ CREATE ]" : "  [ CREATE ]");
+    cprintf(focus == 2 ? "> Transport: " : "  Transport: ");
+    draw_field_value(13, 8, udp_mode ? "UDP" : "TCP", 3);
 
     gotoxy(0, 10);
-    cprintf(focus == 3 ? "> [ BACK ]" : "  [ BACK ]");
+    cprintf(focus == 3 ? "> [ CREATE ]" : "  [ CREATE ]");
+
+    gotoxy(0, 12);
+    cprintf(focus == 4 ? "> [ BACK ]" : "  [ BACK ]");
 
     set_status(state->status);
 }
 
-static void draw_wait_screen(const char *game_name, uint8_t players, uint8_t max_players)
+static void draw_wait_screen(const char *game_name, uint8_t players, uint8_t max_players, bool udp_mode)
 {
     clrscr();
     gotoxy(0, UI_TITLE_Y);
@@ -300,6 +309,8 @@ static void draw_wait_screen(const char *game_name, uint8_t players, uint8_t max
     cprintf("Game: %s", game_name);
     gotoxy(0, 4);
     cprintf("Players: %u of %u", players, max_players);
+    gotoxy(0, 5);
+    cprintf("Transport: %s", udp_mode ? "UDP" : "TCP");
     gotoxy(0, 7);
     cprintf("Press \xC5\xD3\xC3 to cancel");
     set_status("Waiting for lobby start...");
@@ -477,6 +488,16 @@ static bool json_get_bool(const char *json, const char *key, bool *out)
     return false;
 }
 
+static void json_get_transport(const char *json, bool *out_udp)
+{
+    char value[8];
+    *out_udp = false;
+    if (!json_get_string(json, "transport", value, sizeof(value)))
+        return;
+    if (strcmp(value, "udp") == 0 || strcmp(value, "UDP") == 0)
+        *out_udp = true;
+}
+
 static uint8_t parse_games_list(const char *json, GameEntry *out, uint8_t max_out)
 {
     uint8_t count = 0;
@@ -515,6 +536,8 @@ static uint8_t parse_games_list(const char *json, GameEntry *out, uint8_t max_ou
         json_get_int(g_slice, "players", &g_players);
         json_get_int(g_slice, "max", &g_max_players);
         json_get_bool(g_slice, "active", &g_active);
+        out[count].udp = false;
+        json_get_transport(g_slice, &out[count].udp);
 
         snprintf(out[count].id, sizeof(out[count].id), "%s", g_id);
         snprintf(out[count].name, sizeof(out[count].name), "%s", g_name_buf[0] ? g_name_buf : "Game");
@@ -550,12 +573,15 @@ static bool parse_port(const char *text, uint16_t *out_port)
     return true;
 }
 
-static bool start_netstream(const char *host, uint16_t port)
+static bool start_netstream(const char *host, uint16_t port, bool use_udp)
 {
     uint8_t flags = 0;
-    flags |= (1u << 0); /* TCP */
+    if (!use_udp)
+        flags |= (1u << 0); /* TCP */
     flags |= (1u << 1); /* REGISTER */
     flags |= (1u << 2); /* TX clock external */
+    if (use_udp)
+        flags |= (1u << 5); /* UDP sequencing */
     if (get_tv() == AT_PAL)
         flags |= (1u << 4);
 
@@ -801,7 +827,7 @@ int main(void)
                 g_state.screen = SCREEN_CREATE;
                 g_state.focus = 0;
                 strncpy(g_state.status, "Enter game settings", sizeof(g_state.status) - 1);
-                draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
+                draw_create_screen(&g_state, g_game_name, g_game_max, g_game_udp, g_state.focus);
                 continue;
             }
             if (g_key == CH_TAB)
@@ -851,8 +877,9 @@ int main(void)
                     snprintf(g_state.current_game_name, sizeof(g_state.current_game_name), "%s", g_games[g_selected].name);
                     g_wait_players = g_games[g_selected].players;
                     g_wait_max = g_games[g_selected].max_players;
+                    g_wait_udp = g_games[g_selected].udp;
                     g_state.screen = SCREEN_WAIT;
-                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max);
+                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max, g_wait_udp);
                     g_last_heartbeat = rtclok_now();
                     g_last_wait_poll = 0;
                 }
@@ -869,16 +896,22 @@ int main(void)
                 draw_help_screen();
                 continue;
             }
-            if (g_key == CH_TAB || g_key == CH_CURS_DOWN || g_key == CH_CURS_RIGHT)
+            if (g_state.focus == 2 && g_key == CH_ENTER)
             {
-                g_state.focus = (g_state.focus + 1) % 4;
-                draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
+                g_state.focus = 3;
+                draw_create_screen(&g_state, g_game_name, g_game_max, g_game_udp, g_state.focus);
                 continue;
             }
-            if (g_key == CH_CURS_UP || g_key == CH_CURS_LEFT)
+            if (g_key == CH_TAB || g_key == CH_CURS_DOWN || (g_key == CH_CURS_RIGHT && g_state.focus != 2))
             {
-                g_state.focus = (g_state.focus == 0) ? 3 : (g_state.focus - 1);
-                draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
+                g_state.focus = (g_state.focus + 1) % 5;
+                draw_create_screen(&g_state, g_game_name, g_game_max, g_game_udp, g_state.focus);
+                continue;
+            }
+            if (g_key == CH_CURS_UP || (g_key == CH_CURS_LEFT && g_state.focus != 2))
+            {
+                g_state.focus = (g_state.focus == 0) ? 4 : (g_state.focus - 1);
+                draw_create_screen(&g_state, g_game_name, g_game_max, g_game_udp, g_state.focus);
                 continue;
             }
             if (g_state.focus == 0)
@@ -886,12 +919,12 @@ int main(void)
                 if (g_key == CH_ENTER)
                 {
                     g_state.focus = 1;
-                    draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
+                    draw_create_screen(&g_state, g_game_name, g_game_max, g_game_udp, g_state.focus);
                 }
                 else
                 {
                     handle_text_input(g_game_name, sizeof(g_game_name), g_key, false);
-    draw_field_value(8, 4, g_game_name, FIELD_WIDTH_GAME);
+                    draw_field_value(8, 4, g_game_name, FIELD_WIDTH_GAME);
                 }
                 continue;
             }
@@ -900,7 +933,7 @@ int main(void)
                 if (g_key == CH_ENTER)
                 {
                     g_state.focus = 2;
-                    draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
+                    draw_create_screen(&g_state, g_game_name, g_game_max, g_game_udp, g_state.focus);
                 }
                 else
                 {
@@ -909,25 +942,37 @@ int main(void)
                 }
                 continue;
             }
-            if (g_state.focus == 2 && g_key == CH_ENTER)
+            if (g_state.focus == 2)
+            {
+                if (g_key == '+' || g_key == '*' || g_key == CH_CURS_LEFT || g_key == CH_CURS_RIGHT)
+                {
+                    g_game_udp = !g_game_udp;
+                    draw_create_screen(&g_state, g_game_name, g_game_max, g_game_udp, g_state.focus);
+                }
+                continue;
+            }
+            if (g_state.focus == 3 && g_key == CH_ENTER)
             {
                 url_encode(g_game_name, g_url, sizeof(g_url));
-                snprintf(g_line, sizeof(g_line), "/create?client_id=%s&name=%s&max_players=%s",
-                         g_state.client_id, g_url, g_game_max);
+                snprintf(g_line, sizeof(g_line), "/create?client_id=%s&name=%s&max_players=%s&transport=%s",
+                         g_state.client_id, g_url, g_game_max, g_game_udp ? "udp" : "tcp");
                 if (http_get_json(g_line, g_line, sizeof(g_line)))
                 {
                     json_get_string(g_line, "game_id", g_state.current_game_id, sizeof(g_state.current_game_id));
+                    json_get_transport(g_line, &g_wait_udp);
                     snprintf(g_state.current_game_name, sizeof(g_state.current_game_name), "%s", g_game_name);
                     g_wait_players = 1;
                     g_wait_max = (uint8_t)atoi(g_game_max);
+                    if (!strstr(g_line, "\"transport\""))
+                        g_wait_udp = g_game_udp;
                     g_state.screen = SCREEN_WAIT;
-                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max);
+                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max, g_wait_udp);
                     g_last_heartbeat = rtclok_now();
                     g_last_wait_poll = 0;
                 }
                 continue;
             }
-            if (g_state.focus == 3 && g_key == CH_ENTER)
+            if (g_state.focus == 4 && g_key == CH_ENTER)
             {
                 g_state.screen = SCREEN_LIST;
                 draw_list_screen(g_games, g_game_count, g_selected);
@@ -984,10 +1029,12 @@ int main(void)
                     g_port = 0;
                         json_get_int(g_line, "port", &g_port);
                         g_state.start_port = (uint16_t)g_port;
+                        json_get_transport(g_line, &g_state.start_udp);
+                        g_wait_udp = g_state.start_udp;
 
                         clrscr();
                         cprintf("Starting game...");
-                    if (start_netstream(g_state.start_host, g_state.start_port))
+                    if (start_netstream(g_state.start_host, g_state.start_port, g_state.start_udp))
                     {
                         cprintf("Done!\n");
 #ifdef DISK
@@ -1007,7 +1054,7 @@ int main(void)
                 {
                     g_wait_players = (uint8_t)g_players;
                     g_wait_max = (uint8_t)g_max_players;
-                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max);
+                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max, g_wait_udp);
                 }
             }
                 g_last_wait_poll = g_now;
@@ -1024,9 +1071,9 @@ int main(void)
                 else if (g_state.screen == SCREEN_LIST)
                     draw_list_screen(g_games, g_game_count, g_selected);
                 else if (g_state.screen == SCREEN_CREATE)
-                    draw_create_screen(&g_state, g_game_name, g_game_max, g_state.focus);
+                    draw_create_screen(&g_state, g_game_name, g_game_max, g_game_udp, g_state.focus);
                 else if (g_state.screen == SCREEN_WAIT)
-                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max);
+                    draw_wait_screen(g_state.current_game_name, g_wait_players, g_wait_max, g_wait_udp);
             }
         }
     }
