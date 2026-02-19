@@ -20,6 +20,7 @@
 
 #define UI_TITLE_Y 0
 #define UI_STATUS_Y 22
+#define UI_WARNING_Y 21
 
 #define FIELD_WIDTH_HOST 32
 #define FIELD_WIDTH_PORT 5
@@ -33,6 +34,11 @@
 #define MAX_GAMES 8
 #define GAME_ID_LEN 8
 #define GAME_NAME_MAX 32
+
+#define NETSTREAM_FW_TOKEN "netstr"
+#define NETSTREAM_FW_WARNING_LINE1 "THIS FUJINET IS MISSING NETSTREAM"
+#define NETSTREAM_FW_WARNING_LINE2 "INSTALL NETSTREAM BETA FIRMWARE"
+#define SCREEN_COLS 40
 
 // App Key Details
 #define CREATOR_ID 0x3022
@@ -111,6 +117,49 @@ static char g_url[128];
 static const char g_hex[] = "0123456789ABCDEF";
 static uint8_t g_wait_players = 0;
 static uint8_t g_wait_max = 0;
+static bool g_has_netstream_firmware = true;
+
+static uint8_t status_line_y(void)
+{
+    return g_has_netstream_firmware ? UI_STATUS_Y : (UI_STATUS_Y + 1);
+}
+
+static uint8_t centered_x(const char *text)
+{
+    size_t len = strlen(text);
+
+    if (len >= SCREEN_COLS)
+        return 0;
+    return (uint8_t)((SCREEN_COLS - len) / 2);
+}
+
+static void draw_inverse_centered(uint8_t y, const char *text)
+{
+    gotoxy(centered_x(text), y);
+    revers(1);
+    cprintf("%s", text);
+    revers(0);
+}
+
+static void draw_netstream_warning(void)
+{
+    if (g_has_netstream_firmware)
+        return;
+    draw_inverse_centered(UI_WARNING_Y, NETSTREAM_FW_WARNING_LINE1);
+    draw_inverse_centered(UI_WARNING_Y + 1, NETSTREAM_FW_WARNING_LINE2);
+}
+
+static bool detect_netstream_firmware(void)
+{
+    AdapterConfig ac;
+
+    memset(&ac, 0, sizeof(ac));
+    if (!fuji_get_adapter_config(&ac))
+        return false;
+
+    ac.fn_version[sizeof(ac.fn_version) - 1] = '\0';
+    return strstr(ac.fn_version, NETSTREAM_FW_TOKEN) != NULL;
+}
 
 static uint32_t rtclok_now(void)
 {
@@ -154,10 +203,11 @@ static void build_host_buffer(const char *hostname, uint8_t flags, uint8_t audf3
 static void set_status(const char *msg)
 {
     uint8_t i;
-    gotoxy(0, UI_STATUS_Y);
+    uint8_t y = status_line_y();
+    gotoxy(0, y);
     for (i = 0; i < 40; ++i)
         cputc(' ');
-    gotoxy(0, UI_STATUS_Y);
+    gotoxy(0, y);
     cprintf("%s", msg);
 }
 
@@ -239,6 +289,7 @@ static void draw_config_screen(const AppState *state)
     gotoxy(0, 8);
     cprintf(state->focus == 3 ? "> [ CONNECT ]" : "  [ CONNECT ]");
 
+    draw_netstream_warning();
     set_status(state->status);
 }
 
@@ -263,6 +314,7 @@ static void draw_list_screen(const GameEntry *games, uint8_t game_count, uint8_t
         cprintf("%s (%u/%u)%s", games[i].name, games[i].players, games[i].max_players,
                 games[i].active ? "*" : "");
     }
+    draw_netstream_warning();
     set_status(game_count ? "\xC5\xCE\xD4\xC5\xD2=Join  \xC5\xD3\xC3=Back" : "No games yet");
 }
 
@@ -288,6 +340,7 @@ static void draw_create_screen(const AppState *state, const char *game_name, con
     gotoxy(0, 10);
     cprintf(focus == 3 ? "> [ BACK ]" : "  [ BACK ]");
 
+    draw_netstream_warning();
     set_status(state->status);
 }
 
@@ -302,6 +355,7 @@ static void draw_wait_screen(const char *game_name, uint8_t players, uint8_t max
     cprintf("Players: %u of %u", players, max_players);
     gotoxy(0, 7);
     cprintf("Press \xC5\xD3\xC3 to cancel");
+    draw_netstream_warning();
     set_status("Waiting for lobby start...");
 }
 
@@ -333,6 +387,7 @@ static void draw_help_screen(void)
     printf("\n");
     printf("\n");
     printf("\n");
+    draw_netstream_warning();
 }
 
 static void url_encode(const char *src, char *dst, size_t dst_len)
@@ -626,6 +681,8 @@ int main(void)
     g_state.focus = 0;
     strncpy(g_state.status, "\xD4\xC1\xC2 move, \xC5\xCE\xD4\xC5\xD2 select, \xC8=Help", sizeof(g_state.status) - 1);
 
+    g_has_netstream_firmware = detect_netstream_firmware();
+
     fuji_set_appkey_details(CREATOR_ID, APP_ID, DEFAULT);
     appkey_prefill_player_name(g_state.cfg.player_name, sizeof(g_state.cfg.player_name));
     has_saved_name = (g_state.cfg.player_name[0] != '\0');
@@ -742,6 +799,7 @@ int main(void)
 
                 clrscr();
                 cprintf("Connecting lobby...");
+                draw_netstream_warning();
 
                 url_encode(g_state.cfg.player_name, g_url, sizeof(g_url));
                 snprintf(g_line, sizeof(g_line), "/hello?name=%s", g_url);
@@ -987,6 +1045,7 @@ int main(void)
 
                         clrscr();
                         cprintf("Starting game...");
+                        draw_netstream_warning();
                     if (start_netstream(g_state.start_host, g_state.start_port))
                     {
                         cprintf("Done!\n");
