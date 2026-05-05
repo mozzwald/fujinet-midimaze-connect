@@ -36,8 +36,11 @@
 #define GAME_NAME_MAX 32
 
 #define NETSTREAM_FW_TOKEN "netstr"
-#define NETSTREAM_FW_WARNING_LINE1 "THIS FUJINET IS MISSING NETSTREAM"
-#define NETSTREAM_FW_WARNING_LINE2 "INSTALL NETSTREAM BETA FIRMWARE"
+#define MIN_NETSTREAM_FW_MAJOR 1
+#define MIN_NETSTREAM_FW_MINOR 6
+#define MIN_NETSTREAM_FW_PATCH 0
+#define NETSTREAM_FW_WARNING_LINE1 "THIS FUJINET FIRMWARE IS TOO OLD"
+#define NETSTREAM_FW_WARNING_LINE2 "UPDATE TO V1.6.0 OR NEWER"
 #define SCREEN_COLS 40
 
 // App Key Details
@@ -117,11 +120,11 @@ static char g_url[128];
 static const char g_hex[] = "0123456789ABCDEF";
 static uint8_t g_wait_players = 0;
 static uint8_t g_wait_max = 0;
-static bool g_has_netstream_firmware = true;
+static bool g_has_supported_firmware = true;
 
 static uint8_t status_line_y(void)
 {
-    return g_has_netstream_firmware ? UI_STATUS_Y : (UI_STATUS_Y + 1);
+    return g_has_supported_firmware ? UI_STATUS_Y : (UI_STATUS_Y + 1);
 }
 
 static uint8_t centered_x(const char *text)
@@ -143,13 +146,62 @@ static void draw_inverse_centered(uint8_t y, const char *text)
 
 static void draw_netstream_warning(void)
 {
-    if (g_has_netstream_firmware)
+    if (g_has_supported_firmware)
         return;
     draw_inverse_centered(UI_WARNING_Y, NETSTREAM_FW_WARNING_LINE1);
     draw_inverse_centered(UI_WARNING_Y + 1, NETSTREAM_FW_WARNING_LINE2);
 }
 
-static bool detect_netstream_firmware(void)
+static bool parse_version_part(const char **version, uint8_t *part)
+{
+    uint16_t value = 0;
+    bool found_digit = false;
+
+    while (isdigit((unsigned char)**version))
+    {
+        found_digit = true;
+        value = (uint16_t)(value * 10 + (**version - '0'));
+        ++(*version);
+    }
+
+    if (!found_digit || value > 255)
+        return false;
+
+    *part = (uint8_t)value;
+    return true;
+}
+
+static bool firmware_version_at_least(const char *version, uint8_t min_major, uint8_t min_minor, uint8_t min_patch)
+{
+    uint8_t major = 0;
+    uint8_t minor = 0;
+    uint8_t patch = 0;
+
+    if (*version == '#')
+        ++version;
+
+    if (*version == 'v' || *version == 'V')
+        ++version;
+
+    if (!parse_version_part(&version, &major) || *version != '.')
+        return false;
+    ++version;
+
+    if (!parse_version_part(&version, &minor) || *version != '.')
+        return false;
+    ++version;
+
+    if (!parse_version_part(&version, &patch))
+        return false;
+
+    if (major != min_major)
+        return major > min_major;
+    if (minor != min_minor)
+        return minor > min_minor;
+    return patch >= min_patch;
+}
+
+static bool detect_supported_firmware(void)
 {
     AdapterConfig ac;
 
@@ -158,7 +210,8 @@ static bool detect_netstream_firmware(void)
         return false;
 
     ac.fn_version[sizeof(ac.fn_version) - 1] = '\0';
-    return strstr(ac.fn_version, NETSTREAM_FW_TOKEN) != NULL;
+    return strstr(ac.fn_version, NETSTREAM_FW_TOKEN) != NULL ||
+           firmware_version_at_least(ac.fn_version, MIN_NETSTREAM_FW_MAJOR, MIN_NETSTREAM_FW_MINOR, MIN_NETSTREAM_FW_PATCH);
 }
 
 static uint32_t rtclok_now(void)
@@ -380,8 +433,8 @@ static void draw_help_screen(void)
     printf("select MIDIMATE again to start over\n");
     printf("without returning to lobby. \n");
     printf("\n");
-    printf("\n");
-    printf("\n");
+    printf("MIDIMaze loaded from disk requires at\n");
+    printf("least 256K of RAM.\n");
     printf("\n");
     printf("\n");
     printf("\n");
@@ -681,7 +734,7 @@ int main(void)
     g_state.focus = 0;
     strncpy(g_state.status, "\xD4\xC1\xC2 move, \xC5\xCE\xD4\xC5\xD2 select, \xC8=Help", sizeof(g_state.status) - 1);
 
-    g_has_netstream_firmware = detect_netstream_firmware();
+    g_has_supported_firmware = detect_supported_firmware();
 
     fuji_set_appkey_details(CREATOR_ID, APP_ID, DEFAULT);
     appkey_prefill_player_name(g_state.cfg.player_name, sizeof(g_state.cfg.player_name));
